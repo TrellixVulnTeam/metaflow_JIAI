@@ -39,12 +39,14 @@ _all_configs = {}
 
 
 def config_values():
-    for name, (value, conv_func) in _all_configs.items():
-        if value is not None:
+    for name, (value, conv_func, propagate) in _all_configs.items():
+        if propagate and value is not None:
             yield name, conv_func(value)
 
 
-def from_conf(name, default=None, validate_fn=None, propagate=True):
+def from_conf(
+    name, default=None, validate_fn=None, propagate=True, convert_funcs=(str, str)
+):
     """
     First try to pull value from environment, then from metaflow config JSON.
 
@@ -58,24 +60,14 @@ def from_conf(name, default=None, validate_fn=None, propagate=True):
     value = os.environ.get(env_name, METAFLOW_CONFIG.get(env_name, default))
     if validate_fn and value is not None:
         validate_fn(env_name, value)
-    if default is not None:
-        if default == "{}":
-            try:
-                value = json.loads(value)
-                _all_configs[env_name] = (value, json.dumps)
-                return value
-            except json.JSONDecodeError:
-                raise ValueError(
-                    "Expected a valid JSON for %s, got: %s" % (env_name, value)
-                )
-        else:
-            try:
-                value = type(default)(value)
-            except ValueError:
-                raise ValueError(
-                    "Expected a %s for %s, got: %s" % (type(default), env_name, value)
-                )
-    _all_configs[env_name] = (value, str)
+    if value is not None:
+        try:
+            value = convert_funcs[0](value)
+        except Exception as e:
+            raise ValueError(
+                "Unexpected value for %s, got: %s (error: %s)" % (env_name, value, e)
+            )
+    _all_configs[env_name] = (value, convert_funcs[1], propagate)
     return value
 
 
@@ -104,7 +96,11 @@ DEFAULT_ENVIRONMENT = from_conf("DEFAULT_ENVIRONMENT", "local")
 DEFAULT_EVENT_LOGGER = from_conf("DEFAULT_EVENT_LOGGER", "nullSidecarLogger")
 DEFAULT_METADATA = from_conf("DEFAULT_METADATA", "local")
 DEFAULT_MONITOR = from_conf("DEFAULT_MONITOR", "nullSidecarMonitor")
-DEFAULT_PACKAGE_SUFFIXES = from_conf("DEFAULT_PACKAGE_SUFFIXES", ".py,.R,.RDS")
+DEFAULT_PACKAGE_SUFFIXES = from_conf(
+    "DEFAULT_PACKAGE_SUFFIXES",
+    ".py,.R,.RDS",
+    convert_funcs=(lambda x: x.split(","), ",".join),
+)
 DEFAULT_AWS_CLIENT_PROVIDER = from_conf("DEFAULT_AWS_CLIENT_PROVIDER", "boto3")
 
 
@@ -133,12 +129,16 @@ CLIENT_CACHE_PATH = from_conf(
 CLIENT_CACHE_MAX_SIZE = from_conf("CLIENT_CACHE_MAX_SIZE", 10000, propagate=False)
 # Maximum number of cached Flow and TaskDatastores in the cache
 CLIENT_CACHE_MAX_FLOWDATASTORE_COUNT = from_conf(
-    "CLIENT_CACHE_MAX_FLOWDATASTORE_COUNT", 50, propagate=False
+    "CLIENT_CACHE_MAX_FLOWDATASTORE_COUNT",
+    50,
+    propagate=False,
+    convert_funcs=(int, str),
 )
 CLIENT_CACHE_MAX_TASKDATASTORE_COUNT = from_conf(
     "CLIENT_CACHE_MAX_TASKDATASTORE_COUNT",
     CLIENT_CACHE_MAX_FLOWDATASTORE_COUNT * 100,
     propagate=False,
+    convert_funcs=(int, str),
 )
 
 
@@ -154,7 +154,7 @@ S3_VERIFY_CERTIFICATE = from_conf("S3_VERIFY_CERTIFICATE", propagate=False)
 # This is useful if you want to "fail fast" on S3 operations; use with caution
 # though as this may increase failures. Note that this is the number of *retries*
 # so setting it to 0 means each operation will be tried once.
-S3_RETRY_COUNT = from_conf("S3_RETRY_COUNT", 7)
+S3_RETRY_COUNT = from_conf("S3_RETRY_COUNT", 7, convert_funcs=(int, str))
 
 # Threshold to start printing warnings for an AWS retry
 RETRY_WARNING_THRESHOLD = 3
@@ -168,13 +168,17 @@ DATATOOLS_S3ROOT = from_conf(
     else None,
 )
 
-DATATOOLS_CLIENT_PARAMS = from_conf("DATATOOLS_CLIENT_PARAMS", "{}")
+DATATOOLS_CLIENT_PARAMS = from_conf(
+    "DATATOOLS_CLIENT_PARAMS", "{}", convert_funcs=(json.loads, json.dumps)
+)
 if S3_ENDPOINT_URL:
     DATATOOLS_CLIENT_PARAMS["endpoint_url"] = S3_ENDPOINT_URL
 if S3_VERIFY_CERTIFICATE:
     DATATOOLS_CLIENT_PARAMS["verify"] = S3_VERIFY_CERTIFICATE
 
-DATATOOLS_SESSION_VARS = from_conf("DATATOOLS_SESSION_VARS", "{}")
+DATATOOLS_SESSION_VARS = from_conf(
+    "DATATOOLS_SESSION_VARS", "{}", convert_funcs=(json.loads, json.dumps)
+)
 
 # Azure datatools root location
 # Note: we do not expose an actual datatools library for Azure (like we do for S3)
@@ -210,9 +214,9 @@ CARD_AZUREROOT = from_conf(
     if DATASTORE_SYSROOT_AZURE
     else None,
 )
-CARD_NO_WARNING = from_conf("CARD_NO_WARNING", False)
+CARD_NO_WARNING = from_conf("CARD_NO_WARNING", False, convert_funcs=(bool, str))
 
-SKIP_CARD_DUALWRITE = from_conf("SKIP_CARD_DUALWRITE", False)
+SKIP_CARD_DUALWRITE = from_conf("SKIP_CARD_DUALWRITE", False, convert_funcs=(bool, str))
 
 # Azure storage account URL
 AZURE_STORAGE_BLOB_SERVICE_ENDPOINT = from_conf("AZURE_STORAGE_BLOB_SERVICE_ENDPOINT")
@@ -232,7 +236,9 @@ AZURE_STORAGE_WORKLOAD_TYPE = from_conf(
 SERVICE_URL = from_conf("SERVICE_URL")
 SERVICE_NUM_RETRIES = from_conf("SERVICE_RETRY_COUNT", 5)
 SERVICE_AUTH_KEY = from_conf("METAFLOW_SERVICE_AUTH_KEY", propagate=False)
-SERVICE_HEADERS = from_conf("METAFLOW_SERVICE_HEADERS", "{}")
+SERVICE_HEADERS = from_conf(
+    "METAFLOW_SERVICE_HEADERS", "{}", convert_funcs=(json.loads, json.dumps)
+)
 if SERVICE_AUTH_KEY is not None:
     SERVICE_HEADERS["x-api-key"] = SERVICE_AUTH_KEY
 # Checks version compatibility with Metadata service
@@ -270,7 +276,9 @@ SERVICE_INTERNAL_URL = from_conf("SERVICE_INTERNAL_URL", SERVICE_URL)
 # it requires `Batch:TagResource` permissions which may not be available
 # in all Metaflow deployments. Hopefully, some day we can flip the
 # default to True.
-BATCH_EMIT_TAGS = from_conf("BATCH_EMIT_TAGS", False, propagate=False)
+BATCH_EMIT_TAGS = from_conf(
+    "BATCH_EMIT_TAGS", False, propagate=False, convert_funcs=(bool, str)
+)
 
 ###
 # AWS Step Functions configuration
@@ -317,7 +325,10 @@ KUBERNETES_CONTAINER_REGISTRY = from_conf(
 ##
 # This configuration sets `startup_timeout_seconds` in airflow's KubernetesPodOperator.
 AIRFLOW_KUBERNETES_STARTUP_TIMEOUT_SECONDS = from_conf(
-    "AIRFLOW_KUBERNETES_STARTUP_TIMEOUT_SECONDS", 60 * 60, propagate=False
+    "AIRFLOW_KUBERNETES_STARTUP_TIMEOUT_SECONDS",
+    60 * 60,
+    propagate=False,
+    convert_funcs=(int, str),
 )
 # This configuration sets `kubernetes_conn_id` in airflow's KubernetesPodOperator.
 AIRFLOW_KUBERNETES_CONN_ID = from_conf(
@@ -346,7 +357,9 @@ CONDA_DEPENDENCY_RESOLVER = from_conf(
 DEBUG_OPTIONS = ["subcommand", "sidecar", "s3client"]
 
 for typ in DEBUG_OPTIONS:
-    vars()["DEBUG_%s" % typ.upper()] = from_conf("DEBUG_%s" % typ.upper())
+    vars()["DEBUG_%s" % typ.upper()] = from_conf(
+        "DEBUG_%s" % typ.upper(), False, convert_funcs=(bool, str)
+    )
 
 ###
 # Plugin configuration
@@ -393,14 +406,18 @@ _plugin_defaults = {
 
 for plugin_category in _plugin_defaults:
     upper_category = plugin_category.upper()
-    vars()["ENABLED_%s" % upper_category] = from_conf("ENABLED_%s" % upper_category)
+    vars()["ENABLED_%s" % upper_category] = from_conf(
+        "ENABLED_%s" % upper_category, convert_funcs=(lambda x: x.split(","), ",".join)
+    )
     vars()["_TOGGLE_%s" % upper_category] = []
 
 ###
 # AWS Sandbox configuration
 ###
 # Boolean flag for metaflow AWS sandbox access
-AWS_SANDBOX_ENABLED = from_conf("AWS_SANDBOX_ENABLED", False, propagate=False)
+AWS_SANDBOX_ENABLED = from_conf(
+    "AWS_SANDBOX_ENABLED", False, propagate=False, convert_funcs=(bool, str)
+)
 # Metaflow AWS sandbox auth endpoint
 AWS_SANDBOX_STS_ENDPOINT_URL = SERVICE_URL
 # Metaflow AWS sandbox API auth key
@@ -522,6 +539,10 @@ try:
             vars()["ENABLED_%s" % upper_category] = (
                 defaults + vars()["_TOGGLE_%s" % upper_category]
             )
+        else:
+            vars()["ENABLED_%s" % upper_category] = vars()[
+                "ENABLED_%s" % upper_category
+            ].split(",")
 finally:
     # Erase all temporary names to avoid leaking things
     for _n in [

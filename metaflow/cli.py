@@ -920,7 +920,7 @@ def version(obj):
 @click.option(
     "--package-suffixes",
     help="A comma-separated list of file suffixes to include in the code package.",
-    default=DEFAULT_PACKAGE_SUFFIXES,
+    default=",".join(DEFAULT_PACKAGE_SUFFIXES),
     show_default=True,
 )
 @click.option(
