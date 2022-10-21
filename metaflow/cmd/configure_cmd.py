@@ -1,17 +1,28 @@
-import importlib
+import json
 import os
-import traceback
+import sys
+
+from os.path import expanduser
 
 from metaflow._vendor import click
+from metaflow.util import to_unicode
 
-from metaflow.extension_support import get_modules, _ext_debug
-from metaflow.plugins.datastores.local_storage import LocalStorage
-from metaflow.metaflow_config import DATASTORE_LOCAL_DIR
+from .util import makedirs, echo_always
 
-from .util import echo_always
+echo = echo_always
+
+# NOTE: This code needs to be in sync with metaflow/metaflow_config.py.
+METAFLOW_CONFIGURATION_DIR = expanduser(
+    os.environ.get("METAFLOW_HOME", "~/.metaflowconfig")
+)
 
 
-@main.group(help="Configure Metaflow to access the cloud.")
+@click.group()
+def cli():
+    pass
+
+
+@cli.group(help="Configure Metaflow to access the cloud.")
 def configure():
     makedirs(METAFLOW_CONFIGURATION_DIR)
 
@@ -748,7 +759,7 @@ def kubernetes(ctx, profile):
             "\nCannot run Kubernetes with local datastore. Please run"
             " 'metaflow configure aws' or 'metaflow configure azure'."
         )
-        click.abort()
+        click.Abort()
 
     # Configure remote metadata.
     if existing_env.get("METAFLOW_DEFAULT_METADATA") == "service":
@@ -769,24 +780,3 @@ def kubernetes(ctx, profile):
     env.update(configure_kubernetes(existing_env))
 
     persist_env({k: v for k, v in env.items() if v}, profile)
-
-
-try:
-    from metaflow.extension_support import get_modules, load_module, _ext_debug
-
-    _modules_to_import = get_modules("cmd")
-    _clis = []
-    # Reverse to maintain "latest" overrides (in Click, the first one will get it)
-    for m in reversed(_modules_to_import):
-        _get_clis = m.module.__dict__.get("get_cmd_clis")
-        if _get_clis:
-            _clis.extend(_get_clis())
-
-except Exception as e:
-    _ext_debug("\tWARNING: ignoring all plugins due to error during import: %s" % e)
-    print(
-        "WARNING: Command extensions did not load -- ignoring all of them which may not "
-        "be what you want: %s" % e
-    )
-    _clis = []
-    traceback.print_exc()
